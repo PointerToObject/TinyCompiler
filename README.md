@@ -1,76 +1,141 @@
-# AidenOS Minimal C Compiler
+# Aiden Compiler
 
 ## Overview
 
-AidenOS Minimal C Compiler is a small, educational compiler designed to compile basic C programs for the x86 architecture. It allows users to write simple C code and generate corresponding assembly that runs directly in a bare-metal x86 environment.
+Aiden Compiler is a minimal C-like compiler that translates a subset of C code into 32-bit NASM assembly. It is designed for low-level programming, including kernel development and direct hardware manipulation. The compiler supports basic integer arithmetic, pointers to integers, and simple output to VGA text memory.
 
-This compiler is intended for learning purposes and for experimenting with low-level OS development.
+This compiler is intended for educational purposes and for experimenting with bare-metal programming.
 
-<img width="196" height="60" alt="image" src="https://github.com/user-attachments/assets/d6747c0f-0094-417d-86f2-b449d1519e11" /><img width="209" height="210" alt="image" src="https://github.com/user-attachments/assets/255708a6-0326-4043-a824-4128f014ce6e" /> 
+---
 
+## Supported Language Features
 
+* **Data Types**
 
+  * `int` (32-bit integers)
+  * `int*` (pointers to integers)
 
-## Features
+* **Variable Assignment**
 
-* Compile basic C syntax including variables, arithmetic, and control structures.
-* Output x86 assembly code compatible with NASM.
-* Integrates with a custom bootloader for bare-metal execution.
-* Minimal dependencies, designed for use in AidenOS development.
+  * Example: `int a = 42;`
+
+* **Arithmetic**
+
+  * Addition only: `int c = a + b;`
+
+* **Pointers**
+
+  * Declaring integer pointers: `int* ptr = &a;`
+  * Dereferencing pointers: `*ptr = 10;`
+
+* **Statements**
+
+  * `return <expression>;`
+  * `print(<expression>);` — writes a character to VGA text memory
+
+* **Limitations**
+
+  * No control flow (`if`, `while`, `for`)
+  * No functions besides `kernel_main`
+  * Only supports integer expressions
+  * No advanced data structures
+
+---
 
 ## Usage
 
-### Building a C Program
+The compiler is a console application and is designed to run from the **Visual Studio Developer Command Prompt** or any terminal with proper path access.
 
-1. Write your C code and save it as `program.c`.
+### Steps:
 
-2. Run the compiler to generate assembly:
+1. Navigate to the directory containing your C source code and the compiler:
 
-   ```bash
-   ./aidencc program.c
-   ```
+```cmd
+cd /d "D:\OSDev\AidenOS\AidenOS\Kernel"
+```
 
-   **Visual Studio Developer Command Prompt:**
+2. Run the compiler with the following command:
 
-   ```cmd
-   aidencc.exe program.c
-   ```
+```cmd
+TestCompiler.exe kernel.c kernel.asm
+```
 
-3. Assemble the output with NASM:
+* `kernel.c` is the input C source file.
+* `kernel.asm` is the output NASM assembly file.
 
-   ```bash
-   nasm -f bin program.asm -o program.bin
-   ```
+3. Assemble and link the generated assembly file using NASM:
 
-   **Visual Studio Developer Command Prompt:**
+```cmd
+nasm -f bin kernel.asm -o kernel.bin
+```
 
-   ```cmd
-   nasm.exe -f bin program.asm
-   ```
+4. Combine with your bootloader to produce a bootable image, or run in QEMU for testing:
 
-4. Copy the binary to your bootloader or ISO root:
+```cmd
+qemu-system-x86_64 -drive format=raw,file=boot.img
+```
 
-   ```bash
-   cp program.bin iso_root/
-   ```
+---
 
-   **Visual Studio Developer Command Prompt:**
+## Example
 
-   ```cmd
-   copy program.bin iso_root\
-   ```
+```c
+int kernel_main() {
+    int a = 69;
+    int b = 420;
+    int c = a + b;
+    int* ptr = &c;
+    *ptr = 69420;
 
-### Running in AidenOS
+    return *ptr;
+}
+```
 
-1. Include the compiled program in your AidenOS build.
-2. Boot the OS in an emulator or on real hardware.
-3. The program will execute directly on bare metal.
+Generated assembly (partial):
 
-## Limitations
+```asm
+[BITS 32]
+section .bss
+var0 resd 1
+var1 resd 1
+var2 resd 1
 
-* Only supports a subset of C (no structs, floating-point, or complex libraries).
-* Debugging is manual through printing to VGA text memory.
-* No standard library support beyond minimal routines.
+section .text
+global kernel_main
+kernel_main:
+    mov eax, 69
+    mov [var0], eax ; int a
+    mov eax, 420
+    mov [var1], eax ; int b
+    mov eax, [var0]
+    push eax
+    mov eax, [var1]
+    pop ebx
+    add eax, ebx
+    mov [var2], eax ; int c
+    lea eax, [var2]
+    mov [var1], eax ; int* ptr
+    mov eax, 22
+    push eax
+    mov eax, [var1]
+    pop ebx
+    mov [eax], ebx
+    mov eax, [var1]
+    mov eax, [eax]
+    ret
+```
 
+---
 
+## Notes
 
+* This compiler produces **flat 32-bit NASM assembly** suitable for direct integration into bootloader-based projects.
+* All variables are stored in the `.bss` section.
+* Each statement is explicitly represented in assembly; there is no optimization.
+* VGA output is done by writing directly to memory address `0xB8000`.
+
+---
+
+## License
+
+This compiler is provided as-is for educational and experimental purposes.
