@@ -6,6 +6,11 @@ AidenOS Minimal C Compiler is a small, educational compiler designed to compile 
 
 This compiler is intended for learning purposes and for experimenting with low-level OS development.
 
+<img width="196" height="60" alt="image" src="https://github.com/user-attachments/assets/d6747c0f-0094-417d-86f2-b449d1519e11" />
+<img width="209" height="210" alt="image" src="https://github.com/user-attachments/assets/255708a6-0326-4043-a824-4128f014ce6e" />
+
+
+
 ## Features
 
 * Compile basic C syntax including variables, arithmetic, and control structures.
