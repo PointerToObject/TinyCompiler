@@ -1,11 +1,11 @@
 ﻿  compiler.c
-C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(2,9): warning C4005: '_CRT_SECURE_NO_WARNINGS': macro redefinition
-      C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(2,9):
+C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(1,9): warning C4005: '_CRT_SECURE_NO_WARNINGS': macro redefinition
+      C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(1,9):
       '_CRT_SECURE_NO_WARNINGS' previously declared on the command line
   
   Generating code
-  15 of 20 functions (75.0%) were compiled, the rest were copied from previous compilation.
+  6 of 33 functions (18.2%) were compiled, the rest were copied from previous compilation.
     0 functions were new in current compilation
-    0 functions had inline decision re-evaluated but remain unchanged
+    10 functions had inline decision re-evaluated but remain unchanged
   Finished generating code
   TestCompiler.vcxproj -> C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\x64\Release\TestCompiler.exe
