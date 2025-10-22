@@ -532,7 +532,7 @@ Use this information to troubleshoot compilation issues.
 
 **Aiden Compiler** - A specialized C compiler for bare-metal x86 development  
 **Language:** Aiden++  
-**Author:** [Your Name]  
+**Author:** PointerToObject  
 **Version:** 1.0
 
 ---
