@@ -1,7 +1,7 @@
 ﻿  compiler.c
   Generating code
-  29 of 35 functions (82.9%) were compiled, the rest were copied from previous compilation.
-    1 functions were new in current compilation
-    0 functions had inline decision re-evaluated but remain unchanged
+  2 of 46 functions ( 4.3%) were compiled, the rest were copied from previous compilation.
+    0 functions were new in current compilation
+    3 functions had inline decision re-evaluated but remain unchanged
   Finished generating code
   TestCompiler.vcxproj -> C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\x64\Release\TestCompiler.exe
