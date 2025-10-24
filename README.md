@@ -1,473 +1,327 @@
 # Aiden Compiler Documentation
 
-## Overview
-
-**Aiden Compiler** is a lightweight C-to-x86 assembly compiler designed for bare-metal 32-bit environments. It compiles **Aiden++**, a subset of C with extended features, to NASM-compatible assembly code, targeting VGA text mode output for operating system development and low-level programming.
-
-**Current Version:** 1.0  
+**Version 1.0**  
 **Language:** Aiden++  
 **Target Architecture:** x86 (32-bit)  
-**Output Format:** NASM Assembly  
-**Primary Use Case:** Operating System Kernels & Bare Metal Programming
+**Author:** [Your Name]
+
+---
+
+## Overview
+
+**Aiden Compiler** is a specialized C-to-assembly compiler designed for bare-metal x86 operating system development. It compiles **Aiden++**, a C dialect optimized for kernel and bootloader programming, directly to 32-bit x86 NASM assembly language without requiring any runtime libraries or operating system support.
+
+### Key Features
+
+- **Zero-Dependency Architecture** - Generates self-contained code with no external runtime requirements
+- **Direct Hardware Access** - First-class support for inline assembly and memory-mapped I/O
+- **Comprehensive Language Support** - Preprocessor directives, floating-point arithmetic, structures, pointers, and arrays
+- **IDE Integration Ready** - Designed for seamless integration with the upcoming Aiden IDE
+- **VGA Text Output** - Built-in print function for kernel debugging and display
+
+### Technical Specifications
+
+| Specification | Value |
+|--------------|-------|
+| Target Architecture | x86 (IA-32) |
+| Bit Mode | 32-bit protected mode |
+| Output Format | NASM Assembly (.asm) |
+| Memory Model | Flat (origin 0x1000) |
+| Calling Convention | Stack-based (cdecl-compatible) |
+| Floating Point | IEEE 754 single-precision |
 
 ---
 
 ## Getting Started
 
 ### Building the Compiler
-
 ```bash
-gcc compiler.c -o aiden
+gcc -o aiden compiler.c -std=c99 -O2
 ```
 
-### Using the Compiler
-
+### Basic Usage
 ```bash
-./aiden input.c output.asm
-nasm -f bin output.asm -o output.bin
+# Compile Aiden++ source to assembly
+./aiden kernel.c kernel.asm
+
+# Assemble to binary
+nasm -f bin kernel.asm -o kernel.bin
+
+# Run in QEMU
+qemu-system-i386 -kernel kernel.bin
 ```
 
-The Aiden Compiler reads Aiden++ source code and generates x86 assembly suitable for bare-metal execution at memory address `0x1000`.
+### Your First Program
+```c
+int kernel_main() {
+    print("Hello from Aiden++\n");
+    return 0;
+}
+```
 
 ---
 
-## Aiden++ Language Reference
+## Language Reference
 
 ### Data Types
 
-Aiden++ supports the following data types:
+| Type | Size | Range | Description |
+|------|------|-------|-------------|
+| `int` | 4 bytes | ±2.1 billion | 32-bit signed integer |
+| `__int16` | 2 bytes | ±32,768 | 16-bit signed integer |
+| `__int8` | 1 byte | ±128 | 8-bit signed integer |
+| `char` | 1 byte | ±128 | Character/byte value |
+| `float` | 4 bytes | ~7 digits | IEEE 754 single-precision |
+| `void` | - | - | No return value |
+| `T*` | 4 bytes | - | Pointer to type T |
 
-| Type | Size | Description |
-|------|------|-------------|
-| `int` | 4 bytes | Standard 32-bit integer |
-| `__int8` | 1 byte | 8-bit integer |
-| `__int16` | 2 bytes | 16-bit integer |
-| `char` | 1 byte | Character/byte value |
-| `void` | 0 bytes | No return value |
-| `struct` | Variable | User-defined structure |
-| `T*` | 4 bytes | Pointer to type T |
-
-### Numeric Literals
-
-Aiden++ supports multiple number formats:
-
-- **Decimal:** `255`, `42`, `-10`
-- **Hexadecimal:** `0xFF`, `0x10`, `0xDEADBEEF`
-- **Character:** `'A'`, `'z'`, `'0'`
-
-**Example:**
+### Preprocessor
 ```c
-int decimal = 255;
-int hex = 0xFF;        // Same as 255
-int negative = -42;
-char letter = 'A';     // ASCII 65
+// Macro definitions
+#define MAX_SIZE 1024
+#define VGA_ADDR 0xB8000
+
+// File inclusion
+#include "drivers.h"
+#include "memory.h"
 ```
 
 ### Operators
 
-#### Arithmetic Operators
-- `+` Addition
-- `-` Subtraction
-- `*` Multiplication
-- `/` Integer division
-- `++` Increment (prefix: `++x`)
-- `--` Decrement (prefix: `--x`)
+**Arithmetic:** `+` `-` `*` `/` `++` `--`  
+**Comparison:** `==` `!=` `<` `>` `<=` `>=`  
+**Bitwise:** `<<` `>>` `|` `&`  
+**Pointer:** `&` (address-of) `*` (dereference)  
+**Assignment:** `=`
 
-#### Bitwise Operators
-- `<<` Left shift
-- `>>` Right shift (logical)
-- `|` Bitwise OR
-- `&` Bitwise AND
-
-**Example:**
+### Control Flow
 ```c
-int flags = 0x0F;
-int shifted = flags >> 4;    // 0x0F becomes 0x00
-int masked = flags & 0x07;   // Extract lower 3 bits
-int combined = flags | 0xF0; // Set upper nibble
-```
+// If statement
+if (x > 10) {
+    print("Large value\n");
+}
 
-#### Comparison Operators
-- `==` Equal to
-- `!=` Not equal to
-- `<` Less than
-- `>` Greater than
-- `<=` Less than or equal to
-- `>=` Greater than or equal to
+// While loop
+int i = 0;
+while (i < 10) {
+    print("Count: %d\n", i);
+    ++i;
+}
 
-#### Pointer Operators
-- `&` Address-of operator
-- `*` Dereference operator
-
----
-
-## Structures
-
-Structures in Aiden++ allow you to create composite data types with multiple fields.
-
-### Defining Structures
-
-```c
-struct Point {
-    int x;
-    int y;
-};
-
-struct VGA_Char {
-    char c;
-    char color;
-};
-
-struct Rect {
-    __int16 left;
-    __int16 top;
-    __int16 width;
-    __int16 height;
-};
-```
-
-### Declaring and Initializing Structures
-
-```c
-void kernel_main() {
-    // Declaration with initialization
-    struct Point p = {10, 20};
-    struct VGA_Char ch = {'A', 0x0F};
-    
-    // Declaration without initialization
-    struct Rect r;
+// Break statement
+while (1) {
+    if (done) break;
 }
 ```
 
-### Accessing Structure Fields
-
+### Functions
 ```c
-void kernel_main() {
-    struct Point p = {10, 20};
-    
-    // Direct access with dot operator
-    p.x = 15;
-    int y_value = p.y;
-    
-    // Pointer access with arrow operator
-    struct Point* ptr = &p;
-    ptr->x = 25;
-    ptr->y = 30;
-}
-```
-
-### Structure Features
-- **Ordered field layout** with automatic offset calculation
-- Support for **nested types** (primitives and pointers)
-- **Field access** via `.` operator for direct access
-- **Pointer field access** via `->` operator
-- **Aggregate initialization** with brace syntax: `{value1, value2, ...}`
-- Fields must be initialized in **declaration order**
-
----
-
-## Functions
-
-### Function Declaration
-
-```c
-void print_hello() {
-    print("Hello, World!\n");
-}
-
 int add(int a, int b) {
     return a + b;
 }
 
-int multiply(int x, int y) {
-    return x * y;
+void initialize() {
+    print("System ready\n");
+}
+
+int kernel_main() {
+    int sum = add(10, 20);
+    initialize();
+    return 0;
 }
 ```
 
-### Calling Functions
-
+### Pointers
 ```c
-void kernel_main() {
-    int result = add(5, 10);
-    print("Result: %d\n", result);
-    print_hello();
-}
+int value = 42;
+int* ptr = &value;
+*ptr = 100;              // value is now 100
+
+// Direct memory access
+int* vga = 0xB8000;
+*vga = 0x0F41;           // Write 'A' to screen
 ```
 
-### Function Characteristics
-- **Parameters** passed via stack (cdecl convention)
-- **`kernel_main`** receives special prologue/epilogue with stack frame setup
-- **Return values** placed in `eax` register
-- **Automatic return** statement generation if omitted
-- **Recursion** supported
-
----
-
-## Control Flow
-
-### If Statements
-
-Execute code conditionally based on boolean expressions.
-
+### Arrays
 ```c
-if (x == 5) {
-    y = 10;
-}
+int data[10];
+data[0] = 100;
+data[1] = 200;
 
-if (count > 100) {
-    count = 0;
-}
-
-// Single statement (braces optional)
-if (flag)
-    result = 1;
-```
-
-**Note:** `else` clause not supported in current version.
-
-### While Loops
-
-Repeat code while a condition is true.
-
-```c
 int i = 0;
 while (i < 10) {
-    print("Count: %d\n", i);
-    i++;
-}
-
-// Infinite loop
-while (1) {
-    // Loop forever
+    data[i] = i * 10;
+    ++i;
 }
 ```
 
-### Break Statement
-
-Exit a loop early.
-
-```c
-int i = 0;
-while (1) {
-    if (i >= 10) {
-        break;
-    }
-    i++;
-}
-```
-
----
-
-## Pointers
-
-Pointers in Aiden++ allow direct memory manipulation, essential for bare-metal programming.
-
-### Basic Pointer Usage
-
-```c
-void kernel_main() {
-    int x = 42;
-    int* ptr = &x;      // Get address of x
-    *ptr = 100;         // Dereference and assign (x is now 100)
-    
-    print("Value: %d\n", x);  // Prints: Value: 100
-}
-```
-
-### Pointer to Structures
-
+### Structures
 ```c
 struct Point {
     int x;
     int y;
 };
 
-void kernel_main() {
-    struct Point p = {10, 20};
-    struct Point* ptr = &p;
-    
-    ptr->x = 30;  // Access via arrow operator
-    ptr->y = 40;
-}
+struct Point p = {10, 20};
+p.x = 30;
+
+struct Point* ptr = &p;
+ptr->y = 40;
 ```
 
-### Direct Memory Access
-
+### Inline Assembly
 ```c
-void kernel_main() {
-    char* vga = 0xB8000;  // VGA text buffer address
-    *vga = 'A';           // Write character to screen
-    *(vga + 1) = 0x0F;    // Set color attribute
-}
+__asm__("cli");              // Clear interrupts
+__asm__("hlt");              // Halt processor
+__asm__("mov eax, 0x1000");  // Register manipulation
 ```
 
-### Pointer Arithmetic
+### Built-in Print Function
 ```c
-char* buffer = 0xB8000;
-buffer++;              // Advance by sizeof(char) = 1 byte
-int* array = 0x2000;
-array++;               // Advance by sizeof(int) = 4 bytes
-```
-
----
-
-## Built-in Print Function
-
-Aiden++ provides a built-in `print()` function for VGA text mode output at address `0xB8000`.
-
-### Syntax
-
-```c
-print(format_string);
-print(format_string, arg1, arg2, ...);
-```
-
-### Format Specifiers
-
-| Specifier | Type | Output | Example |
-|-----------|------|--------|---------|
-| `%c` | char | Single character | `'A'` → `A` |
-| `%d` | int | Decimal integer | `42` → `42` |
-| `%x` | int | 8-digit hexadecimal | `255` → `000000FF` |
-
-### Examples
-
-```c
-// Simple string
-print("Hello World\n");
-
-// Integer formatting
+print("Hello, World\n");
 print("Value: %d\n", 42);
-
-// Hexadecimal formatting
 print("Hex: 0x%x\n", 0xFF);
-
-// Character formatting
 print("Char: %c\n", 'A');
-
-// Multiple arguments
-print("Char: %c, Val: 0x%x, Shift: %d\n", 'Z', 0xFF, 15);
-
-// Structure field printing
-struct VGA_Char ch = {'A', 0x0F};
-int x = 0xFF;
-print("Char: %c, Val: 0x%x, Shift: %d\n", ch.c, x, x >> 4);
+print("Float: %f\n", 3.14159);
 ```
 
-### Special Handling
-- **Newline characters** (`\n`) are automatically filtered (not displayed)
-- Format string **processed character-by-character**
-- **Width specifiers** (e.g., `%8x`) are stripped during lexing
-- Output appears in **white text on black background** (VGA attribute `0x0F`)
-
----
-
-## Inline Assembly
-
-Aiden++ supports inline assembly using the `__asm__()` directive for direct x86 instruction embedding.
-
-### Syntax
-
-```c
-__asm__("instruction");
-```
-
-### Examples
-
-```c
-void kernel_main() {
-    __asm__("cli");           // Clear interrupts
-    __asm__("hlt");           // Halt CPU
-    __asm__("mov eax, 0");    // Set EAX to 0
-    __asm__("int 0x80");      // Software interrupt
-    __asm__("sti");           // Set interrupts
-}
-```
-
-### Use Cases
-- CPU control (interrupts, halt)
-- Direct register manipulation
-- Port I/O operations
-- Performance-critical code sections
+**Format Specifiers:**
+- `%d` - Decimal integer
+- `%x` - Hexadecimal (8 digits)
+- `%c` - Single character
+- `%f` - Floating-point (6 decimal places)
 
 ---
 
 ## Complete Examples
 
-### Example 1: VGA Character Display
-
+### VGA Text Output
 ```c
-struct VGA_Char {
-    char c;
-    char color;
+int kernel_main() {
+    int* vga = 0xB8000;
+    vga[0] = 0x0F41;  // White 'A'
+    vga[1] = 0x0F42;  // White 'B'
+    vga[2] = 0x0F43;  // White 'C'
+    return 0;
+}
+```
+
+### Structure with Pointers
+```c
+struct Registers {
+    int eax;
+    int ebx;
+    int ecx;
 };
 
-void kernel_main() {
-    struct VGA_Char ch = {'A', 0x0F};
-    int x = 0xFF;
-    print("Char: %c, Val: 0x%x, Shift: %d\n", ch.c, x, x >> 4);
+void save_state(struct Registers* regs) {
+    regs->eax = 0;
+    regs->ebx = 0;
+    regs->ecx = 0;
+}
+
+int kernel_main() {
+    struct Registers state;
+    save_state(&state);
+    print("State saved\n");
+    return 0;
 }
 ```
 
-### Example 2: Pixel Drawing
-
+### Floating-Point Math
 ```c
-struct Pixel {
-    char x;
-    char y;
-    char color;
-};
+#define PI 3.14159
 
-void draw_pixel(struct Pixel* p) {
-    char* vga = 0xB8000;
-    int offset = (p->y * 80 + p->x) * 2;
-    *(vga + offset) = '*';
-    *(vga + offset + 1) = p->color;
+float calculate_area(float radius) {
+    return PI * radius * radius;
 }
 
-void kernel_main() {
-    struct Pixel px = {10, 5, 0x0C};
-    draw_pixel(&px);
+int kernel_main() {
+    float r = 5.0;
+    float area = calculate_area(r);
+    print("Area: %f\n", area);
+    return 0;
 }
 ```
 
-### Example 3: Bitwise Operations
-
+### Hardware Port I/O
 ```c
-void kernel_main() {
-    int flags = 0xF0;
-    int mask = 0x0F;
-    
-    int result1 = flags | mask;   // 0xFF
-    int result2 = flags & mask;   // 0x00
-    int result3 = flags >> 4;     // 0x0F
-    int result4 = mask << 4;      // 0xF0
-    
-    print("OR:  0x%x\n", result1);
-    print("AND: 0x%x\n", result2);
-    print("SHR: 0x%x\n", result3);
-    print("SHL: 0x%x\n", result4);
+void write_port(int port, char value) {
+    __asm__("mov edx, [port]");
+    __asm__("mov al, [value]");
+    __asm__("out dx, al");
+}
+
+int kernel_main() {
+    write_port(0x3F8, 'H');
+    return 0;
 }
 ```
 
-### Example 4: Loop with Break
-
+### Array Processing
 ```c
-void kernel_main() {
-    int count = 0;
+int kernel_main() {
+    int buffer[16];
+    int i = 0;
     
-    while (1) {
-        print("Count: %d\n", count);
-        count++;
-        
-        if (count >= 10) {
-            break;
-        }
+    while (i < 16) {
+        buffer[i] = i * 10;
+        ++i;
     }
     
-    print("Done!\n");
+    i = 0;
+    while (i < 16) {
+        print("buffer[%d] = %d\n", i, buffer[i]);
+        ++i;
+    }
+    
+    return 0;
 }
 ```
+
+---
+
+## IDE Integration
+
+The Aiden Compiler is designed for seamless integration with the upcoming **Aiden IDE**, a complete development environment for operating systems and bootloaders.
+
+### Planned Features
+
+- **Project Templates** - Pre-configured kernel and bootloader projects
+- **One-Click Build** - Automatic compilation, assembly, and linking
+- **Integrated Emulation** - QEMU integration with debug output capture
+- **Syntax Highlighting** - Full Aiden++ language support
+- **Code Completion** - Context-aware suggestions for functions and structures
+- **Hardware Support** - Driver templates and port I/O snippets
+- **Real-Time Diagnostics** - Inline error detection and suggestions
+
+### Workflow
+
+1. Create new kernel project from template
+2. Edit source with syntax highlighting
+3. Press F5 to compile and run in emulator
+4. View output in integrated console
+5. Debug with memory and register inspection
+
+---
+
+## Limitations
+
+**Unsupported Features:**
+- Unsigned types (planned for next release)
+- Type casting (planned for next release)
+- Unions (planned for next release)
+- for loops (use while instead)
+- switch/case statements
+- Function pointers
+- Global variables
+- Compound assignment operators (+=, -=, etc.)
+
+**Memory Constraints:**
+- Maximum 256 variables per function
+- Maximum 8192 tokens per compilation unit
+- Maximum 256 string/float literals
+- Maximum 64 structure definitions
 
 ---
 
@@ -475,66 +329,82 @@ void kernel_main() {
 
 ### Memory Layout
 
-- **Code Origin:** `0x1000` (4KB offset)
-- **VGA Buffer:** `0xB8000` (text mode, 80x25)
-- **Architecture:** 32-bit x86 protected mode
+- **Code Origin:** 0x1000
+- **VGA Buffer:** 0xB8000 (80x25 text mode)
+- **Variable Storage:** BSS section (static allocation)
 
-### Assembly Output
+### Assembly Output Structure
+```nasm
+[BITS 32]
+[org 0x1000]
 
-The compiler generates three sections:
+section .text
+    ; Function code
 
-1. **`.text`** - Executable code
-2. **`.data`** - Initialized data (string literals)
-3. **`.bss`** - Uninitialized data (variables)
+section .data
+    ; String and float literals
+
+section .bss
+    ; Variable storage
+```
 
 ### Calling Convention
 
-- **Stack-based** parameter passing (right-to-left)
-- **EAX** register for return values
-- **Caller-cleanup** for stack arguments
-
-### Variable Naming
-
-All user variables are prefixed with `v_` in assembly output:
-- `int x` → `v_x`
-- `struct Point p` → `v_p`
+- Parameters pushed right-to-left
+- Caller cleans up stack
+- Return values in EAX (integers) or FPU ST(0) (floats)
+- Stack frame only for kernel_main
 
 ---
 
-## Limitations
+## Roadmap
 
-- No `else` clause for `if` statements
-- No `for` loops (use `while` instead)
-- No arrays (use pointers instead)
-- No string type (use `char*`)
-- No floating-point support
-- No preprocessor (`#include`, `#define`, etc.)
-- No standard library
-- Maximum 256 variables per program
-- Maximum 256 types (including struct definitions)
+**Version 1.1 (Planned)**
+- Unsigned integer types (unsigned int, unsigned char)
+- Type casting operations
+- Union data type
+- Port I/O built-in functions (outb, inb, outw, inw)
+- Volatile keyword for MMIO
 
----
+**Version 1.2 (Planned)**
+- sizeof operator
+- Enumerations (enum)
+- Function pointers
+- Static variables
+- Switch/case statements
 
-## Debugging
-
-The compiler outputs extensive debug information to stdout:
-
-- **Tokenization** phase with token types
-- **Variable declarations** with types and sizes
-- **Expression trees** with operation details
-- **Function parsing** progress
-
-Use this information to troubleshoot compilation issues.
+**Version 2.0 (Planned)**
+- Aiden IDE release
+- Enhanced optimization
+- Inline function support
+- Advanced preprocessor features
 
 ---
 
-## License & Credits
+## System Requirements
 
-**Aiden Compiler** - A specialized C compiler for bare-metal x86 development  
-**Language:** Aiden++  
-**Author:** PointerToObject  
-**Version:** 1.0
+**Compiler:**
+- C99-compliant compiler (GCC 4.8+ or Clang 3.4+)
+- 64 MB RAM minimum
+
+**Target:**
+- x86 processor (i386+)
+- NASM 2.10+
+- GNU LD (binutils)
+- QEMU, Bochs, VirtualBox, or real hardware
 
 ---
 
-*Happy bare-metal coding with Aiden++!*
+## License & Support
+
+**Aiden Compiler** - A specialized compiler for bare-metal x86 development  
+**Author:** [Your Name]  
+**Version:** 1.0  
+**License:** [Your License]
+
+For bug reports, feature requests, and support, please visit:  
+[Your Repository URL]
+
+---
+
+*Build operating systems the easy way with Aiden++ and Aiden IDE.*
