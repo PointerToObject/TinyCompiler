@@ -1,7 +1,10 @@
 ﻿  compiler.c
+C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(108,38): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(194,40): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\TestCompiler\compiler.c(227,32): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
   Generating code
-  2 of 46 functions ( 4.3%) were compiled, the rest were copied from previous compilation.
+  2 of 53 functions ( 3.8%) were compiled, the rest were copied from previous compilation.
     0 functions were new in current compilation
-    3 functions had inline decision re-evaluated but remain unchanged
+    10 functions had inline decision re-evaluated but remain unchanged
   Finished generating code
   TestCompiler.vcxproj -> C:\Users\aiden\OneDrive\Desktop\Company\TestCompiler\x64\Release\TestCompiler.exe

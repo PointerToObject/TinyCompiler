@@ -1,16 +1,26 @@
-﻿// ----- compiler.c (STRUCT INIT + INLINE ASM + VGA + BITWISE + HEX + CHAR PRINT) -----
-
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
 
+// ---------- PREPROCESSOR ----------
+typedef struct {
+    char* name;
+    char* value;
+} Define;
+
+Define defines[256];
+int define_count = 0;
+
+char* included_files[64];
+int included_file_count = 0;
+
 // ---------- GLOBAL ----------
-FILE* out; // output file
+FILE* out;
 char* src;
 int srcpos = 0;
-static int has_return = 0;  // *** TRACK RETURN ***
+static int has_return = 0;
 
 // ---------- TOKENIZER ----------
 typedef enum {
@@ -19,12 +29,17 @@ typedef enum {
     TK_LPAREN, TK_RPAREN, TK_LBRACE, TK_RBRACE, TK_SEMI, TK_PRINT, TK_IF, TK_WHILE,
     TK_EQ, TK_NEQ, TK_LT, TK_GT, TK_LE, TK_GE, TK_STRING, TK_CHAR_LITERAL,
     TK_INC, TK_DEC, TK_COMMA, TK_BREAK, TK_STRUCT, TK_DOT, TK_ARROW,
-    TK_ASM, TK_COLON,
-    // *** NEW: BITWISE OPERATORS ***
-    TK_SHL, TK_SHR, TK_OR, TK_AND
+    TK_ASM, TK_COLON, TK_SHL, TK_SHR, TK_OR, TK_AND,
+    TK_ELSE, TK_FOR, TK_LBRACKET, TK_RBRACKET, TK_FLOAT, TK_FLOAT_LITERAL
 } TokenKind;
 
-typedef struct { TokenKind kind; char* str; long val; } Token;
+typedef struct {
+    TokenKind kind;
+    char* str;
+    long val;
+    double fval;
+} Token;
+
 #define MAXTOK 8192
 Token tokens[MAXTOK];
 int tok_count = 0, tok_pos = 0;
@@ -41,6 +56,7 @@ void expect(TokenKind k) {
     if (!match(k)) { fprintf(stderr, "expected token kind %d got %d\n", k, tokens[tok_pos].kind); exit(1); }
     tok_pos++;
 }
+
 static char* my_strdup(const char* s) {
     size_t len = strlen(s) + 1;
     char* d = malloc(len);
@@ -48,14 +64,215 @@ static char* my_strdup(const char* s) {
     return d;
 }
 
+void unconsume_tok(Token* tok) {
+    if (tok_pos <= 0) {
+        fprintf(stderr, "cannot unconsume token: token position is %d\n", tok_pos);
+        exit(1);
+    }
+    tok_pos--;
+}
+
+// ---------- PREPROCESSOR FUNCTIONS ----------
+void add_define(const char* name, const char* value) {
+    defines[define_count].name = my_strdup(name);
+    defines[define_count].value = value ? my_strdup(value) : my_strdup("1");
+    printf("[PREPROC] #define %s %s\n", defines[define_count].name, defines[define_count].value);
+    define_count++;
+}
+
+const char* find_define(const char* name) {
+    for (int i = 0; i < define_count; i++) {
+        if (!strcmp(defines[i].name, name)) {
+            return defines[i].value;
+        }
+    }
+    return NULL;
+}
+
+int is_file_included(const char* path) {
+    for (int i = 0; i < included_file_count; i++) {
+        if (!strcmp(included_files[i], path)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void mark_file_included(const char* path) {
+    included_files[included_file_count++] = my_strdup(path);
+}
+
+char* preprocess(const char* input_src);
+
+char* preprocess(const char* input_src) {
+    int capacity = strlen(input_src) * 2;
+    char* output = malloc(capacity);
+    int out_pos = 0;
+    int in_pos = 0;
+
+    while (input_src[in_pos]) {
+        while (input_src[in_pos] == ' ' || input_src[in_pos] == '\t') in_pos++;
+
+        if (input_src[in_pos] == '#') {
+            in_pos++;
+            while (input_src[in_pos] == ' ' || input_src[in_pos] == '\t') in_pos++;
+
+            char directive[32];
+            int dir_len = 0;
+            while (isalpha((unsigned char)input_src[in_pos]) || input_src[in_pos] == '_') {
+                directive[dir_len++] = input_src[in_pos++];
+            }
+            directive[dir_len] = 0;
+
+            while (input_src[in_pos] == ' ' || input_src[in_pos] == '\t') in_pos++;
+
+            if (!strcmp(directive, "define")) {
+                char name[128];
+                int name_len = 0;
+                while (isalnum((unsigned char)input_src[in_pos]) || input_src[in_pos] == '_') {
+                    name[name_len++] = input_src[in_pos++];
+                }
+                name[name_len] = 0;
+
+                while (input_src[in_pos] == ' ' || input_src[in_pos] == '\t') in_pos++;
+
+                char value[256];
+                int val_len = 0;
+                while (input_src[in_pos] && input_src[in_pos] != '\n') {
+                    value[val_len++] = input_src[in_pos++];
+                }
+                value[val_len] = 0;
+
+                while (val_len > 0 && (value[val_len - 1] == ' ' || value[val_len - 1] == '\t')) {
+                    value[--val_len] = 0;
+                }
+
+                add_define(name, val_len > 0 ? value : NULL);
+                if (input_src[in_pos] == '\n') in_pos++;
+                continue;
+            }
+            else if (!strcmp(directive, "include")) {
+                char filename[256];
+                int fn_len = 0;
+
+                char delim = input_src[in_pos];
+                if (delim == '"' || delim == '<') {
+                    in_pos++;
+                    char end_delim = (delim == '"') ? '"' : '>';
+
+                    while (input_src[in_pos] && input_src[in_pos] != end_delim) {
+                        filename[fn_len++] = input_src[in_pos++];
+                    }
+                    filename[fn_len] = 0;
+
+                    if (input_src[in_pos] == end_delim) in_pos++;
+                    while (input_src[in_pos] && input_src[in_pos] != '\n') in_pos++;
+                    if (input_src[in_pos] == '\n') in_pos++;
+
+                    if (!is_file_included(filename)) {
+                        mark_file_included(filename);
+
+                        FILE* inc_file = fopen(filename, "rb");
+                        if (!inc_file) {
+                            fprintf(stderr, "Cannot open include file: %s\n", filename);
+                            exit(1);
+                        }
+
+                        fseek(inc_file, 0, SEEK_END);
+                        long inc_size = ftell(inc_file);
+                        fseek(inc_file, 0, SEEK_SET);
+                        char* inc_content = malloc(inc_size + 1);
+                        fread(inc_content, 1, inc_size, inc_file);
+                        inc_content[inc_size] = 0;
+                        fclose(inc_file);
+
+                        printf("[PREPROC] #include \"%s\" (%ld bytes)\n", filename, inc_size);
+
+                        char* processed_inc = preprocess(inc_content);
+                        free(inc_content);
+
+                        int proc_len = strlen(processed_inc);
+                        if (out_pos + proc_len >= capacity) {
+                            capacity = (out_pos + proc_len) * 2;
+                            output = realloc(output, capacity);
+                        }
+                        memcpy(output + out_pos, processed_inc, proc_len);
+                        out_pos += proc_len;
+                        free(processed_inc);
+                    }
+                    else {
+                        printf("[PREPROC] #include \"%s\" (already included, skipped)\n", filename);
+                    }
+                    continue;
+                }
+            }
+
+            while (input_src[in_pos] && input_src[in_pos] != '\n') in_pos++;
+            if (input_src[in_pos] == '\n') in_pos++;
+            continue;
+        }
+
+        if (isalpha((unsigned char)input_src[in_pos]) || input_src[in_pos] == '_') {
+            char ident[128];
+            int id_len = 0;
+            int ident_start = in_pos;  // Remember where identifier started
+
+            while (isalnum((unsigned char)input_src[in_pos]) || input_src[in_pos] == '_') {
+                ident[id_len++] = input_src[in_pos++];
+            }
+            ident[id_len] = 0;
+
+            const char* replacement = find_define(ident);
+            if (replacement) {
+                int repl_len = strlen(replacement);
+                if (out_pos + repl_len >= capacity) {
+                    capacity = (out_pos + repl_len) * 2;
+                    output = realloc(output, capacity);
+                }
+                memcpy(output + out_pos, replacement, repl_len);
+                out_pos += repl_len;
+            }
+            else {
+                if (out_pos + id_len >= capacity) {
+                    capacity = (out_pos + id_len) * 2;
+                    output = realloc(output, capacity);
+                }
+                memcpy(output + out_pos, ident, id_len);
+                out_pos += id_len;
+            }
+
+            // Preserve whitespace after identifier/replacement
+            if (input_src[in_pos] == ' ' || input_src[in_pos] == '\t' ||
+                input_src[in_pos] == '\n' || input_src[in_pos] == '\r') {
+                if (out_pos >= capacity - 1) {
+                    capacity *= 2;
+                    output = realloc(output, capacity);
+                }
+                output[out_pos++] = input_src[in_pos++];
+            }
+            continue;
+        }
+
+        if (out_pos >= capacity - 1) {
+            capacity *= 2;
+            output = realloc(output, capacity);
+        }
+        output[out_pos++] = input_src[in_pos++];
+    }
+
+    output[out_pos] = 0;
+    return output;
+}
+
 // ---------- LEXER ----------
 void lex_number() {
     int start = srcpos;
     long val;
+    double fval = 0.0;
+    int is_float = 0;
 
-    // Check for hex prefix (0x or 0X)
     if (src[srcpos] == '0' && (src[srcpos + 1] == 'x' || src[srcpos + 1] == 'X')) {
-        srcpos += 2; // Skip "0x"
+        srcpos += 2;
         start = srcpos;
         while (isxdigit((unsigned char)src[srcpos])) srcpos++;
 
@@ -68,30 +285,51 @@ void lex_number() {
         int len = srcpos - start;
         memcpy(tmp, src + start, len);
         tmp[len] = 0;
-        val = strtol(tmp, NULL, 16); // Parse as hex
+        val = strtol(tmp, NULL, 16);
         printf("[DEBUG] Lexed HEX NUMBER: 0x%lx (%ld)\n", val, val);
     }
     else {
-        // Decimal number
         while (isdigit((unsigned char)src[srcpos])) srcpos++;
+
+        if (src[srcpos] == '.') {
+            is_float = 1;
+            srcpos++;
+            while (isdigit((unsigned char)src[srcpos])) srcpos++;
+
+            if (src[srcpos] == 'e' || src[srcpos] == 'E') {
+                srcpos++;
+                if (src[srcpos] == '+' || src[srcpos] == '-') srcpos++;
+                while (isdigit((unsigned char)src[srcpos])) srcpos++;
+            }
+        }
+
         char tmp[64];
         int len = srcpos - start;
         memcpy(tmp, src + start, len);
         tmp[len] = 0;
-        val = strtol(tmp, NULL, 10);
-        printf("[DEBUG] Lexed DECIMAL NUMBER: %ld\n", val);
+
+        if (is_float) {
+            fval = strtod(tmp, NULL);
+            printf("[DEBUG] Lexed FLOAT: %f\n", fval);
+            add_token((Token) { TK_FLOAT_LITERAL, NULL, 0, fval });
+            return;
+        }
+        else {
+            val = strtol(tmp, NULL, 10);
+            printf("[DEBUG] Lexed DECIMAL NUMBER: %ld\n", val);
+        }
     }
 
-    add_token((Token) { TK_NUMBER, NULL, val });
+    add_token((Token) { TK_NUMBER, NULL, val, 0.0 });
 }
 
 void lex_char() {
-    srcpos++; // Skip opening '
-    char value = src[srcpos]; // Get the char
-    srcpos++; // Skip the char
+    srcpos++;
+    char value = src[srcpos];
+    srcpos++;
     if (src[srcpos] != '\'') { fprintf(stderr, "unterminated char literal\n"); exit(1); }
-    srcpos++; // Skip closing '
-    add_token((Token) { TK_CHAR_LITERAL, NULL, (long)value });
+    srcpos++;
+    add_token((Token) { TK_CHAR_LITERAL, NULL, (long)value, 0.0 });
     printf("[DEBUG] Lexed CHAR: '%c' (val=%ld)\n", value, (long)value);
 }
 
@@ -107,6 +345,7 @@ void lex_ident_or_kw() {
     else if (!strcmp(id, "__int8")) t.kind = TK_INT8;
     else if (!strcmp(id, "__int16")) t.kind = TK_INT16;
     else if (!strcmp(id, "char")) t.kind = TK_CHAR;
+    else if (!strcmp(id, "float")) t.kind = TK_FLOAT;
     else if (!strcmp(id, "return")) t.kind = TK_RETURN;
     else if (!strcmp(id, "print")) t.kind = TK_PRINT;
     else if (!strcmp(id, "if")) t.kind = TK_IF;
@@ -114,13 +353,15 @@ void lex_ident_or_kw() {
     else if (!strcmp(id, "break")) t.kind = TK_BREAK;
     else if (!strcmp(id, "struct")) t.kind = TK_STRUCT;
     else if (!strcmp(id, "__asm__")) t.kind = TK_ASM;
+    else if (!strcmp(id, "else")) t.kind = TK_ELSE;
+    else if (!strcmp(id, "for")) t.kind = TK_FOR;
     else t.kind = TK_IDENT, t.str = id;
     add_token(t);
     printf("[DEBUG] Lexed %s: %s\n", t.kind == TK_IDENT ? "IDENT" : "KEYWORD", id);
 }
 
 void lex_string() {
-    srcpos++; // skip "
+    srcpos++;
     int start = srcpos;
     while (src[srcpos] && src[srcpos] != '"') {
         srcpos++;
@@ -130,20 +371,18 @@ void lex_string() {
     memcpy(raw, src + start, raw_len);
     raw[raw_len] = 0;
 
-    // *** FIXED: PROCESS ESCAPES + SKIP WIDTH DIGITS ***
     char* processed = malloc(raw_len + 1);
     int j = 0;
     for (int i = 0; i < raw_len; i++) {
         if (raw[i] == '\\' && i + 1 < raw_len && raw[i + 1] == 'n') {
-            processed[j++] = '\n';  // *** CONVERT \n ***
-            i++; // skip 'n'
+            processed[j++] = '\n';
+            i++;
         }
-        // *** NEW: SKIP WIDTH DIGITS AFTER %x ***
         else if (raw[i] == '%' && i + 2 < raw_len && raw[i + 1] == 'x' &&
             isdigit((unsigned char)raw[i + 2])) {
-            processed[j++] = '%';   // Keep %
-            processed[j++] = 'x';   // Keep x
-            i += 2;                 // SKIP DIGITS
+            processed[j++] = '%';
+            processed[j++] = 'x';
+            i += 2;
         }
         else {
             processed[j++] = raw[i];
@@ -152,14 +391,13 @@ void lex_string() {
     processed[j] = 0;
 
     char* s = my_strdup(processed);
-    srcpos++; // skip closing "
+    srcpos++;
 
-    add_token((Token) { TK_STRING, s, 0 });
+    add_token((Token) { TK_STRING, s, 0, 0.0 });
     printf("[DEBUG] Lexed STRING: '%s' (raw: '%s')\n", s, raw);
     free(raw);
     free(processed);
 }
-
 
 void tokenize() {
     printf("[*] Tokenizing...\n");
@@ -174,7 +412,6 @@ void tokenize() {
 
         Token t = { 0 };
 
-        // *** NEW: BITWISE OPERATORS ***
         if (c == '<' && src[srcpos + 1] == '<') { t.kind = TK_SHL; srcpos += 2; add_token(t); printf("[DEBUG] Lexed SHL\n"); continue; }
         if (c == '>' && src[srcpos + 1] == '>') { t.kind = TK_SHR; srcpos += 2; add_token(t); printf("[DEBUG] Lexed SHR\n"); continue; }
         if (c == '|') { t.kind = TK_OR; srcpos++; add_token(t); printf("[DEBUG] Lexed OR\n"); continue; }
@@ -207,14 +444,16 @@ void tokenize() {
         if (c == ';') { t.kind = TK_SEMI; srcpos++; add_token(t); printf("[DEBUG] Lexed SEMI\n"); continue; }
         if (c == ',') { t.kind = TK_COMMA; srcpos++; add_token(t); printf("[DEBUG] Lexed COMMA\n"); continue; }
         if (c == '.') { t.kind = TK_DOT; srcpos++; add_token(t); printf("[DEBUG] Lexed DOT\n"); continue; }
+        if (c == '[') { t.kind = TK_LBRACKET; srcpos++; add_token(t); printf("[DEBUG] Lexed LBRACKET\n"); continue; }
+        if (c == ']') { t.kind = TK_RBRACKET; srcpos++; add_token(t); printf("[DEBUG] Lexed RBRACKET\n"); continue; }
         fprintf(stderr, "unexpected char '%c'\n", c); exit(1);
     }
-    add_token((Token) { TK_EOF, NULL, 0 });
+    add_token((Token) { TK_EOF, NULL, 0, 0.0 });
     printf("[*] Tokens generated: %d\n", tok_count);
 }
 
 // ---------- TYPES ----------
-typedef enum { TY_VOID, TY_INT, TY_CHAR, TY_PTR, TY_STRUCT } TypeKind;
+typedef enum { TY_VOID, TY_INT, TY_CHAR, TY_PTR, TY_STRUCT, TY_ARRAY, TY_FLOAT } TypeKind;
 
 typedef struct Field {
     char* name;
@@ -226,6 +465,8 @@ typedef struct Type {
     TypeKind kind;
     int size;
     struct Type* ptr_to;
+    struct Type* base;
+    int length;
     char* name;
     Field** fields;
     int nfields;
@@ -239,9 +480,11 @@ Type* add_type(TypeKind k, int size, Type* ptr_to, char* name, Field** fields, i
     t->kind = k;
     t->size = size;
     t->ptr_to = ptr_to;
+    t->base = (k == TY_ARRAY) ? ptr_to : NULL;
+    t->length = (k == TY_ARRAY) ? nfields : 0;
     t->name = name ? my_strdup(name) : NULL;
     t->fields = fields;
-    t->nfields = nfields;
+    t->nfields = (k == TY_STRUCT) ? nfields : 0;
     return t;
 }
 
@@ -259,6 +502,7 @@ Type* ty_int;
 Type* ty_int8;
 Type* ty_int16;
 Type* ty_char;
+Type* ty_float;
 
 void init_types() {
     ty_void = add_type(TY_VOID, 0, NULL, NULL, NULL, 0);
@@ -266,13 +510,12 @@ void init_types() {
     ty_int8 = add_type(TY_INT, 1, NULL, NULL, NULL, 0);
     ty_int16 = add_type(TY_INT, 2, NULL, NULL, NULL, 0);
     ty_char = add_type(TY_CHAR, 1, NULL, NULL, NULL, 0);
+    ty_float = add_type(TY_FLOAT, 4, NULL, NULL, NULL, 0);
 }
 
-// *** FIXED: STRUCT TYPE SUPPORT ***
 Type* parse_base_type() {
     Token* t = peek_tok();
 
-    // *** HANDLE STRUCT NAMES ***
     if (t->kind == TK_IDENT) {
         Type* st = find_type(t->str);
         if (st && st->kind == TY_STRUCT) {
@@ -282,12 +525,12 @@ Type* parse_base_type() {
         }
     }
 
-    // *** PRIMITIVE TYPES ***
     if (match(TK_INT)) { consume_tok(); return ty_int; }
     if (match(TK_INT8)) { consume_tok(); return ty_int8; }
     if (match(TK_INT16)) { consume_tok(); return ty_int16; }
     if (match(TK_CHAR)) { consume_tok(); return ty_char; }
     if (match(TK_VOID)) { consume_tok(); return ty_void; }
+    if (match(TK_FLOAT)) { consume_tok(); return ty_float; }
 
     fprintf(stderr, "unexpected type '%s'\n", t->str);
     exit(1);
@@ -341,17 +584,24 @@ typedef enum {
     EXPR_NUMBER, EXPR_VAR, EXPR_ADD, EXPR_SUB, EXPR_MUL, EXPR_DIV, EXPR_ADDR, EXPR_DEREF,
     EXPR_CMP_EQ, EXPR_CMP_NEQ, EXPR_CMP_LT, EXPR_CMP_GT, EXPR_CMP_LE, EXPR_CMP_GE,
     EXPR_INC, EXPR_DEC, EXPR_CALL, EXPR_FIELD,
-    // *** NEW: BITWISE ***
-    EXPR_SHL, EXPR_SHR, EXPR_OR, EXPR_AND
+    EXPR_SHL, EXPR_SHR, EXPR_OR, EXPR_AND,
+    EXPR_INDEX
 } ExprKind;
 
 typedef struct Expr {
-    ExprKind kind; long val; char* name; struct Expr* left; struct Expr* right;
-    struct Type* type; int offset;
-    struct Expr** args; int nargs;
+    ExprKind kind;
+    long val;
+    double fval;
+    char* name;
+    struct Expr* left;
+    struct Expr* right;
+    struct Type* type;
+    int offset;
+    struct Expr** args;
+    int nargs;
 } Expr;
 
-// ---------- FORWARD DECLARATIONS ***
+// ---------- FORWARD DECLARATIONS ----------
 Expr* parse_primary();
 Expr* parse_factor();
 Expr* parse_term();
@@ -362,8 +612,8 @@ void debug_expr(Expr* e, int depth);
 void parse_statement();
 void emit_expr(Expr* e);
 void emit_addr(Expr* e);
+void parse_struct_field_assign();
 
-// *** NEW: STRUCT INITIALIZATION PARSING ***
 void parse_struct_init(Type* stype, int slot) {
     expect(TK_LBRACE);
     int field_idx = 0;
@@ -375,7 +625,6 @@ void parse_struct_init(Type* stype, int slot) {
         Field* field = stype->fields[field_idx];
         Expr* init_val = parse_expr();
 
-        // Generate code to initialize this field
         fprintf(out, "    ; init %s.%s\n", vars[slot].name, field->name);
         emit_expr(init_val);
         fprintf(out, "    push eax\n");
@@ -403,6 +652,19 @@ const char* add_string(const char* s) {
     strings[idx].str = my_strdup(s);
     printf("[DEBUG] Added string literal: %s (label: %s)\n", s, strings[idx].label);
     return strings[idx].label;
+}
+
+// ---------- FLOAT LITERALS ----------
+typedef struct { double val; char label[32]; } FloatLit;
+FloatLit floats[256];
+int float_count = 0;
+
+const char* add_float(double val) {
+    int idx = float_count++;
+    snprintf(floats[idx].label, sizeof(floats[idx].label), "flt%d", idx);
+    floats[idx].val = val;
+    printf("[DEBUG] Added float literal: %f (label: %s)\n", val, floats[idx].label);
+    return floats[idx].label;
 }
 
 // ---------- CODEGEN ----------
@@ -440,6 +702,15 @@ Expr* parse_primary() {
         printf("[DEBUG] Parsed NUMBER(%ld, size=%d)\n", e->val, e->type->size);
         return e;
     }
+    if (match(TK_FLOAT_LITERAL)) {
+        Token* n = consume_tok();
+        Expr* e = calloc(1, sizeof(Expr));
+        e->kind = EXPR_NUMBER;
+        e->fval = n->fval;
+        e->type = ty_float;
+        printf("[DEBUG] Parsed FLOAT(%f, size=%d)\n", e->fval, e->type->size);
+        return e;
+    }
     if (match(TK_CHAR_LITERAL)) {
         Token* n = consume_tok();
         Expr* e = calloc(1, sizeof(Expr));
@@ -450,15 +721,103 @@ Expr* parse_primary() {
         return e;
     }
     if (match(TK_IDENT)) {
-        Token* id = consume_tok();
-        char* name = my_strdup(id->str);
+        Token* idtok = consume_tok();
+
+        if (match(TK_LBRACKET)) {
+            consume_tok();
+            Expr* index = parse_expr();
+            expect(TK_RBRACKET);
+
+            int slot = find_var(idtok->str);
+            if (slot < 0) {
+                fprintf(stderr, "undefined variable %s\n", idtok->str);
+                exit(1);
+            }
+            if (vars[slot].type->kind != TY_ARRAY) {
+                fprintf(stderr, "%s is not an array\n", idtok->str);
+                exit(1);
+            }
+
+            Expr* e = calloc(1, sizeof(Expr));
+            e->kind = EXPR_INDEX;
+            e->name = my_strdup(idtok->str);
+            e->left = index;
+            e->type = vars[slot].type->base;
+
+            printf("[DEBUG] Parsed INDEX(%s, size=%d)\n", e->name, e->type->size);
+            return e;
+        }
+
+        if (match(TK_DOT)) {
+            consume_tok();
+            if (!match(TK_IDENT)) { fprintf(stderr, "expected field name\n"); exit(1); }
+            Token* field_tok = consume_tok();
+
+            int slot = find_var(idtok->str);
+            if (slot < 0) { fprintf(stderr, "undefined %s\n", idtok->str); exit(1); }
+            Type* base_type = vars[slot].type;
+            if (base_type->kind != TY_STRUCT) { fprintf(stderr, "%s is not a struct\n", idtok->str); exit(1); }
+
+            int foffset = -1;
+            Type* ftype = NULL;
+            for (int i = 0; i < base_type->nfields; i++) {
+                if (!strcmp(base_type->fields[i]->name, field_tok->str)) {
+                    foffset = base_type->fields[i]->offset;
+                    ftype = base_type->fields[i]->type;
+                    break;
+                }
+            }
+            if (foffset < 0) { fprintf(stderr, "no field %s in struct\n", field_tok->str); exit(1); }
+
+            Expr* base_expr = calloc(1, sizeof(Expr));
+            base_expr->kind = EXPR_VAR;
+            base_expr->name = my_strdup(idtok->str);
+            base_expr->type = base_type;
+
+            Expr* e = calloc(1, sizeof(Expr));
+            e->kind = EXPR_FIELD;
+            e->left = base_expr;
+            e->offset = foffset;
+            e->type = ftype;
+            printf("[DEBUG] Parsed FIELD (offset=%d, size=%d)\n", foffset, ftype->size);
+            return e;
+        }
+
+        int slot = find_var(idtok->str);
+        if (slot >= 0) {
+            if (match(TK_LPAREN)) {
+                Expr* e = calloc(1, sizeof(Expr));
+                e->kind = EXPR_CALL;
+                e->name = my_strdup(idtok->str);
+                e->nargs = 0;
+                e->args = NULL;
+                consume_tok();
+                if (!match(TK_RPAREN)) {
+                    do {
+                        Expr* arg = parse_expr();
+                        e->args = realloc(e->args, sizeof(Expr*) * (e->nargs + 1));
+                        e->args[e->nargs++] = arg;
+                    } while (match(TK_COMMA) && (consume_tok(), 1));
+                }
+                expect(TK_RPAREN);
+                return e;
+            }
+
+            Expr* e = calloc(1, sizeof(Expr));
+            e->kind = EXPR_VAR;
+            e->name = my_strdup(idtok->str);
+            e->type = vars[slot].type;
+            printf("[DEBUG] Parsed VAR(%s, size=%d)\n", e->name, e->type->size);
+            return e;
+        }
+
         if (match(TK_LPAREN)) {
-            consume_tok(); // consume '('
             Expr* e = calloc(1, sizeof(Expr));
             e->kind = EXPR_CALL;
-            e->name = name;
+            e->name = my_strdup(idtok->str);
             e->nargs = 0;
             e->args = NULL;
+            consume_tok();
             if (!match(TK_RPAREN)) {
                 do {
                     Expr* arg = parse_expr();
@@ -467,52 +826,11 @@ Expr* parse_primary() {
                 } while (match(TK_COMMA) && (consume_tok(), 1));
             }
             expect(TK_RPAREN);
-            e->type = ty_int; // assume int return
-            printf("[DEBUG] Parsed CALL %s with %d args\n", e->name, e->nargs);
             return e;
         }
-        else if (match(TK_DOT) || match(TK_ARROW)) {
-            TokenKind op = consume_tok()->kind;
-            if (!match(TK_IDENT)) { fprintf(stderr, "expected field name\n"); exit(1); }
-            char* field_name = my_strdup(consume_tok()->str);
-            int slot = find_var(name);
-            if (slot < 0) { fprintf(stderr, "undefined variable %s\n", name); exit(1); }
-            Type* base_type = vars[slot].type;
-            ExprKind base_kind = (op == TK_DOT) ? EXPR_VAR : EXPR_DEREF;
-            if (op == TK_ARROW) {
-                if (base_type->kind != TY_PTR) { fprintf(stderr, "%s is not a pointer\n", name); exit(1); }
-                base_type = base_type->ptr_to;
-            }
-            if (base_type->kind != TY_STRUCT) { fprintf(stderr, "%s is not a struct\n", name); exit(1); }
-            int fidx = -1;
-            for (int i = 0; i < base_type->nfields; i++) {
-                if (!strcmp(base_type->fields[i]->name, field_name)) {
-                    fidx = i;
-                    break;
-                }
-            }
-            if (fidx < 0) { fprintf(stderr, "no field %s in struct\n", field_name); exit(1); }
-            Expr* base = calloc(1, sizeof(Expr));
-            base->kind = base_kind;
-            base->name = name;
-            base->type = base_type;
-            Expr* e = calloc(1, sizeof(Expr));
-            e->kind = EXPR_FIELD;
-            e->left = base;
-            e->offset = base_type->fields[fidx]->offset;
-            e->type = base_type->fields[fidx]->type;
-            printf("[DEBUG] Parsed FIELD %s (offset=%d, size=%d)\n", field_name, e->offset, e->type->size);
-            return e;
-        }
-        // Simple variable
-        int slot = find_var(name);
-        if (slot < 0) { fprintf(stderr, "undefined variable %s\n", name); exit(1); }
-        Expr* e = calloc(1, sizeof(Expr));
-        e->kind = EXPR_VAR;
-        e->name = name;
-        e->type = vars[slot].type;
-        printf("[DEBUG] Parsed VAR(%s, size=%d)\n", e->name, e->type->size);
-        return e;
+
+        fprintf(stderr, "undefined variable %s\n", idtok->str);
+        exit(1);
     }
     if (match(TK_INC) || match(TK_DEC)) {
         TokenKind op = consume_tok()->kind;
@@ -527,6 +845,12 @@ Expr* parse_primary() {
         printf("[DEBUG] Parsed %s(%s, size=%d)\n", (op == TK_INC) ? "INC" : "DEC", e->name, e->type->size);
         return e;
     }
+    if (match(TK_LPAREN)) {
+        consume_tok();
+        Expr* e = parse_expr();
+        expect(TK_RPAREN);
+        return e;
+    }
     fprintf(stderr, "unexpected token in primary: kind=%d\n", t->kind);
     exit(1);
 }
@@ -535,7 +859,10 @@ void debug_expr(Expr* e, int depth) {
     if (!e) return;
     for (int i = 0; i < depth; i++) printf("  ");
     switch (e->kind) {
-    case EXPR_NUMBER: printf("NUMBER(%ld, size=%d)\n", e->val, e->type->size); break;
+    case EXPR_NUMBER:
+        if (e->type == ty_float) printf("FLOAT(%f, size=%d)\n", e->fval, e->type->size);
+        else printf("NUMBER(%ld, size=%d)\n", e->val, e->type->size);
+        break;
     case EXPR_VAR: printf("VAR(%s, size=%d)\n", e->name, e->type->size); break;
     case EXPR_ADDR: printf("ADDR(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); break;
     case EXPR_DEREF: printf("DEREF(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); break;
@@ -556,11 +883,11 @@ void debug_expr(Expr* e, int depth) {
     case EXPR_CMP_LE: printf("CMP_LE(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); debug_expr(e->right, depth + 1); break;
     case EXPR_CMP_GE: printf("CMP_GE(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); debug_expr(e->right, depth + 1); break;
     case EXPR_FIELD: printf("FIELD(offset=%d, size=%d)\n", e->offset, e->type->size); debug_expr(e->left, depth + 1); break;
-        // *** NEW: BITWISE ***
     case EXPR_SHL: printf("SHL(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); debug_expr(e->right, depth + 1); break;
     case EXPR_SHR: printf("SHR(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); debug_expr(e->right, depth + 1); break;
     case EXPR_OR:  printf("OR(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); debug_expr(e->right, depth + 1); break;
     case EXPR_AND: printf("AND(size=%d)\n", e->type->size); debug_expr(e->left, depth + 1); debug_expr(e->right, depth + 1); break;
+    case EXPR_INDEX: printf("INDEX(%s, size=%d)\n", e->name, e->type->size); debug_expr(e->left, depth + 1); break;
     }
 }
 
@@ -573,7 +900,7 @@ Expr* parse_factor() {
         n->kind = (op == TK_STAR) ? EXPR_MUL : EXPR_DIV;
         n->left = e;
         n->right = r;
-        n->type = ty_int; // assume
+        n->type = (e->type == ty_float || r->type == ty_float) ? ty_float : ty_int;
         printf("[DEBUG] Parsed %s(size=%d)\n", (op == TK_STAR) ? "MUL" : "DIV", n->type->size);
         e = n;
     }
@@ -589,7 +916,7 @@ Expr* parse_term() {
         n->kind = (op == TK_PLUS) ? EXPR_ADD : EXPR_SUB;
         n->left = e;
         n->right = r;
-        n->type = ty_int; // assume
+        n->type = (e->type == ty_float || r->type == ty_float) ? ty_float : ty_int;
         printf("[DEBUG] Parsed %s(size=%d)\n", (op == TK_PLUS) ? "ADD" : "SUB", n->type->size);
         e = n;
     }
@@ -618,7 +945,6 @@ Expr* parse_comparison() {
     return e;
 }
 
-// *** NEW: BITWISE EXPRESSIONS ***
 Expr* parse_bitwise() {
     Expr* e = parse_comparison();
     while (match(TK_SHL) || match(TK_SHR) || match(TK_OR) || match(TK_AND)) {
@@ -658,9 +984,23 @@ void emit_addr(Expr* e) {
         break;
     }
     case EXPR_FIELD: {
-        // recursive addr
         emit_addr(e->left);
         if (e->offset) fprintf(out, "    add eax,%d\n", e->offset);
+        break;
+    }
+    case EXPR_INDEX: {
+        int slot = find_var(e->name);
+        if (slot < 0) { fprintf(stderr, "undefined variable %s\n", e->name); exit(1); }
+        emit_expr(e->left);
+        fprintf(out, "    push eax\n");
+        fprintf(out, "    lea eax,[%s]\n", vars[slot].name);
+        fprintf(out, "    pop ebx\n");
+        int elem_size = vars[slot].type->base->size;
+        if (elem_size > 1) {
+            fprintf(out, "    mov ecx,%d\n", elem_size);
+            fprintf(out, "    imul ebx,ecx\n");
+        }
+        fprintf(out, "    add eax,ebx\n");
         break;
     }
     default: fprintf(stderr, "cannot take address\n"); exit(1);
@@ -672,23 +1012,35 @@ void emit_expr(Expr* e) {
     printf("[DEBUG] Emitting code for expression kind: %d (size=%d)\n", e->kind, e->type->size);
     switch (e->kind) {
     case EXPR_NUMBER:
-        fprintf(out, "    mov eax,%ld\n", e->val);
+        if (e->type == ty_float) {
+            const char* label = add_float(e->fval);
+            fprintf(out, "    fld dword [%s]\n", label);
+        }
+        else {
+            fprintf(out, "    mov eax,%ld\n", e->val);
+        }
         break;
     case EXPR_VAR: {
         int slot = find_var(e->name);
         if (slot < 0) { fprintf(stderr, "undefined variable %s\n", e->name); exit(1); }
         const char* varname = vars[slot].name;
-        int s = e->type->size;
-        if (s == 1) {
-            fprintf(out, "    mov al,[%s]\n", varname);
-            fprintf(out, "    movzx eax,al\n");
-        }
-        else if (s == 2) {
-            fprintf(out, "    mov ax,[%s]\n", varname);
-            fprintf(out, "    movzx eax,ax\n");
+
+        if (e->type == ty_float) {
+            fprintf(out, "    fld dword [%s]\n", varname);
         }
         else {
-            fprintf(out, "    mov eax,[%s]\n", varname);
+            int s = e->type->size;
+            if (s == 1) {
+                fprintf(out, "    mov al,[%s]\n", varname);
+                fprintf(out, "    movzx eax,al\n");
+            }
+            else if (s == 2) {
+                fprintf(out, "    mov ax,[%s]\n", varname);
+                fprintf(out, "    movzx eax,ax\n");
+            }
+            else {
+                fprintf(out, "    mov eax,[%s]\n", varname);
+            }
         }
         break;
     }
@@ -739,6 +1091,33 @@ void emit_expr(Expr* e) {
         }
         break;
     }
+    case EXPR_INDEX: {
+        int slot = find_var(e->name);
+        if (slot < 0) { fprintf(stderr, "undefined variable %s\n", e->name); exit(1); }
+        emit_expr(e->left);
+        fprintf(out, "    push eax\n");
+        fprintf(out, "    lea eax,[%s]\n", vars[slot].name);
+        fprintf(out, "    pop ebx\n");
+        int elem_size = vars[slot].type->base->size;
+        if (elem_size > 1) {
+            fprintf(out, "    mov ecx,%d\n", elem_size);
+            fprintf(out, "    imul ebx,ecx\n");
+        }
+        fprintf(out, "    add eax,ebx\n");
+
+        if (elem_size == 1) {
+            fprintf(out, "    mov al,[eax]\n");
+            fprintf(out, "    movzx eax,al\n");
+        }
+        else if (elem_size == 2) {
+            fprintf(out, "    mov ax,[eax]\n");
+            fprintf(out, "    movzx eax,ax\n");
+        }
+        else {
+            fprintf(out, "    mov eax,[eax]\n");
+        }
+        break;
+    }
     case EXPR_INC: case EXPR_DEC: {
         int slot = find_var(e->name);
         if (slot < 0) { fprintf(stderr, "undefined variable %s\n", e->name); exit(1); }
@@ -769,7 +1148,13 @@ void emit_expr(Expr* e) {
     case EXPR_CALL: {
         for (int i = e->nargs - 1; i >= 0; --i) {
             emit_expr(e->args[i]);
-            fprintf(out, "    push eax\n");
+            if (e->args[i]->type == ty_float) {
+                fprintf(out, "    sub esp,4\n");
+                fprintf(out, "    fstp dword [esp]\n");
+            }
+            else {
+                fprintf(out, "    push eax\n");
+            }
         }
         fprintf(out, "    call %s\n", e->name);
         if (e->nargs > 0) {
@@ -778,69 +1163,103 @@ void emit_expr(Expr* e) {
         break;
     }
     case EXPR_ADD: {
-        emit_expr(e->left);
-        fprintf(out, "    push eax\n");
-        emit_expr(e->right);
-        fprintf(out, "    pop ebx\n");
-        fprintf(out, "    add eax,ebx\n");
+        if (e->left->type == ty_float || e->right->type == ty_float) {
+            emit_expr(e->left);
+            emit_expr(e->right);
+            fprintf(out, "    faddp\n");
+        }
+        else {
+            emit_expr(e->left);
+            fprintf(out, "    push eax\n");
+            emit_expr(e->right);
+            fprintf(out, "    pop ebx\n");
+            fprintf(out, "    add eax,ebx\n");
+        }
         break;
     }
     case EXPR_SUB: {
-        emit_expr(e->left);
-        fprintf(out, "    push eax\n");
-        emit_expr(e->right);
-        fprintf(out, "    pop ebx\n");
-        fprintf(out, "    sub eax,ebx\n");
+        if (e->left->type == ty_float || e->right->type == ty_float) {
+            emit_expr(e->left);
+            emit_expr(e->right);
+            fprintf(out, "    fsubp\n");
+        }
+        else {
+            emit_expr(e->left);
+            fprintf(out, "    push eax\n");
+            emit_expr(e->right);
+            fprintf(out, "    pop ebx\n");
+            fprintf(out, "    sub ebx,eax\n");
+            fprintf(out, "    mov eax,ebx\n");
+        }
         break;
     }
     case EXPR_MUL: {
-        emit_expr(e->left);
-        fprintf(out, "    push eax\n");
-        emit_expr(e->right);
-        fprintf(out, "    pop ebx\n");
-        fprintf(out, "    imul eax,ebx\n");
+        if (e->left->type == ty_float || e->right->type == ty_float) {
+            emit_expr(e->left);
+            emit_expr(e->right);
+            fprintf(out, "    fmulp\n");
+        }
+        else {
+            emit_expr(e->left);
+            fprintf(out, "    push eax\n");
+            emit_expr(e->right);
+            fprintf(out, "    pop ebx\n");
+            fprintf(out, "    imul eax,ebx\n");
+        }
         break;
     }
     case EXPR_DIV: {
-        emit_expr(e->left);
-        fprintf(out, "    push eax\n");
-        emit_expr(e->right);
-        fprintf(out, "    pop ebx\n");
-        fprintf(out, "    mov edx,0\n    idiv ebx\n");
+        if (e->left->type == ty_float || e->right->type == ty_float) {
+            emit_expr(e->left);
+            emit_expr(e->right);
+            fprintf(out, "    fdivp\n");
+        }
+        else {
+            emit_expr(e->left);
+            fprintf(out, "    push eax\n");
+            emit_expr(e->right);
+            fprintf(out, "    mov ebx,eax\n");
+            fprintf(out, "    pop eax\n");
+            fprintf(out, "    mov edx,0\n    idiv ebx\n");
+        }
         break;
     }
-                 // *** NEW: BITWISE OPERATIONS ***
     case EXPR_SHL: {
-        emit_expr(e->right); // shift amount
+        emit_expr(e->right);
         fprintf(out, "    push eax\n");
-        emit_expr(e->left);  // value to shift
+        emit_expr(e->left);
         fprintf(out, "    pop ecx\n");
-        fprintf(out, "    shl eax, cl\n");  // shift eax by cl (low byte of ecx)
+        fprintf(out, "    shl eax, cl\n");
         break;
     }
     case EXPR_SHR: {
-        emit_expr(e->right); // shift amount
+        emit_expr(e->right);
         fprintf(out, "    push eax\n");
-        emit_expr(e->left);  // value to shift
+        emit_expr(e->left);
         fprintf(out, "    pop ecx\n");
-        fprintf(out, "    shr eax, cl\n");  // shift eax by cl
+        fprintf(out, "    shr eax, cl\n");
         break;
     }
     case EXPR_OR: {
-        emit_expr(e->left);  fprintf(out, "    push eax\n");
-        emit_expr(e->right); fprintf(out, "    pop ebx\n    or eax, ebx\n");
+        emit_expr(e->left);
+        fprintf(out, "    push eax\n");
+        emit_expr(e->right);
+        fprintf(out, "    pop ebx\n    or eax, ebx\n");
         break;
     }
     case EXPR_AND: {
-        emit_expr(e->left);  fprintf(out, "    push eax\n");
-        emit_expr(e->right); fprintf(out, "    pop ebx\n    and eax, ebx\n");
+        emit_expr(e->left);
+        fprintf(out, "    push eax\n");
+        emit_expr(e->right);
+        fprintf(out, "    pop ebx\n    and eax, ebx\n");
         break;
     }
     case EXPR_CMP_EQ: case EXPR_CMP_NEQ: case EXPR_CMP_LT: case EXPR_CMP_GT: case EXPR_CMP_LE: case EXPR_CMP_GE: {
         emit_expr(e->left);
         fprintf(out, "    push eax\n");
         emit_expr(e->right);
-        fprintf(out, "    pop ebx\n");
+        fprintf(out, "    mov ebx,eax\n");
+        fprintf(out, "    pop eax\n");
         fprintf(out, "    cmp eax,ebx\n");
         switch (e->kind) {
         case EXPR_CMP_EQ: fprintf(out, "    sete al\n"); break;
@@ -856,7 +1275,6 @@ void emit_expr(Expr* e) {
     }
 }
 
-// ---------- WHILE LOOPS WITH BREAK ----------
 void parse_while() {
     int start_lbl = label_id++;
     int end_lbl = label_id++;
@@ -889,7 +1307,6 @@ void parse_while() {
     fprintf(out, "while_end%d:\n", end_lbl);
 }
 
-// ---------- IF STATEMENTS ----------
 void parse_if() {
     consume_tok();
     expect(TK_LPAREN);
@@ -910,9 +1327,8 @@ void parse_if() {
     fprintf(out, "skip_label%d:\n", lbl);
 }
 
-// ---------- STRUCT DEFINITION ----------
 void parse_struct_def() {
-    consume_tok(); // struct
+    consume_tok();
     if (!match(TK_IDENT)) { fprintf(stderr, "expected struct name\n"); exit(1); }
     char* name = my_strdup(consume_tok()->str);
     expect(TK_LBRACE);
@@ -938,14 +1354,12 @@ void parse_struct_def() {
     printf("[DEBUG] Defined struct %s (size=%d)\n", name, st->size);
 }
 
-// ---------- INLINE ASM SUPPORT ----------
 void parse_inline_asm() {
-    consume_tok(); // __asm__
+    consume_tok();
     expect(TK_LPAREN);
     if (!match(TK_STRING)) { fprintf(stderr, "expected asm string\n"); exit(1); }
     char* asm_str = consume_tok()->str;
 
-    // *** EMIT ASM ***
     fprintf(out, "    ; inline asm: %s\n", asm_str);
     fprintf(out, "    %s\n", asm_str);
 
@@ -954,9 +1368,7 @@ void parse_inline_asm() {
     printf("[DEBUG] Emitted inline asm\n");
 }
 
-// ---------- STATEMENTS ----------
 void parse_struct_field_assign() {
-    // Already consumed IDENT (struct var), DOT, IDENT (field)
     char* struct_name = my_strdup(tokens[tok_pos - 3].str);
     char* field_name = my_strdup(tokens[tok_pos - 1].str);
 
@@ -994,64 +1406,99 @@ void parse_struct_field_assign() {
     expect(TK_SEMI);
 }
 
-// ----- FIXED: STATEMENTS WITH STRUCT INITIALIZATION ----------
 void parse_statement() {
     Token* t = peek_tok();
 
-    // *** 1. PRIMITIVE TYPE DECLARATION ***
-    if (match(TK_INT) || match(TK_INT8) || match(TK_INT16) || match(TK_CHAR) || match(TK_VOID)) {
+    if (match(TK_INT) || match(TK_INT8) || match(TK_INT16) || match(TK_CHAR) || match(TK_VOID) || match(TK_FLOAT)) {
         Type* vtype = parse_type();
         if (!match(TK_IDENT)) { fprintf(stderr, "expected identifier\n"); exit(1); }
         Token* id = consume_tok();
+        if (match(TK_LBRACKET)) {
+            consume_tok();
+            if (!match(TK_NUMBER)) { fprintf(stderr, "expected array size\n"); exit(1); }
+            Token* size_tok = consume_tok();
+            expect(TK_RBRACKET);
+            int len = size_tok->val;
+            if (len <= 0) { fprintf(stderr, "array size must be positive\n"); exit(1); }
+            int size = vtype->size * len;
+            vtype = add_type(TY_ARRAY, size, vtype, NULL, NULL, len);
+            printf("[DEBUG] Parsed ARRAY type (base size=%d, len=%d, total size=%d)\n", vtype->base->size, len, size);
+        }
         int slot = add_var(id->str, vtype);
+        printf("[DEBUG] Declared variable %s (type=%d, size=%d)\n", id->str, vtype->kind, vtype->size);
         if (match(TK_ASSIGN)) {
             consume_tok();
-            Expr* e = parse_expr();
-            fprintf(out, "    ; assign to %s\n", vars[slot].name);
-            emit_expr(e);
-            int s = vtype->size;
-            if (s == 1) fprintf(out, "    mov [%s],al\n", vars[slot].name);
-            else if (s == 2) fprintf(out, "    mov [%s],ax\n", vars[slot].name);
-            else fprintf(out, "    mov [%s],eax\n", vars[slot].name);
+            if (vtype->kind == TY_STRUCT) {
+                parse_struct_init(vtype, slot);
+            }
+            else if (vtype->kind == TY_ARRAY) {
+                fprintf(stderr, "array initialization not supported\n"); exit(1);
+            }
+            else {
+                Expr* e = parse_expr();
+                fprintf(out, "    ; assign to %s\n", vars[slot].name);
+                emit_expr(e);
+                if (vtype == ty_float) {
+                    fprintf(out, "    fstp dword [%s]\n", vars[slot].name);
+                }
+                else {
+                    int s = vtype->size;
+                    if (s == 1) fprintf(out, "    mov [%s],al\n", vars[slot].name);
+                    else if (s == 2) fprintf(out, "    mov [%s],ax\n", vars[slot].name);
+                    else fprintf(out, "    mov [%s],eax\n", vars[slot].name);
+                }
+            }
         }
         expect(TK_SEMI);
         return;
     }
 
-    // *** 2. STRUCT TYPE DECLARATION WITH INITIALIZATION - FIXED! ***
     if (t->kind == TK_IDENT) {
-        // Check if this is a STRUCT TYPE
         Type* stype = find_type(t->str);
         if (stype && stype->kind == TY_STRUCT) {
-            consume_tok(); // consume struct type name (VGA_Char)
+            consume_tok();
             if (!match(TK_IDENT)) { fprintf(stderr, "expected struct variable name\n"); exit(1); }
-            Token* id = consume_tok(); // consume variable name (ch)
+            Token* id = consume_tok();
+            if (match(TK_LBRACKET)) {
+                consume_tok();
+                if (!match(TK_NUMBER)) { fprintf(stderr, "expected array size\n"); exit(1); }
+                Token* size_tok = consume_tok();
+                expect(TK_RBRACKET);
+                int len = size_tok->val;
+                if (len <= 0) { fprintf(stderr, "array size must be positive\n"); exit(1); }
+                int size = stype->size * len;
+                stype = add_type(TY_ARRAY, size, stype, NULL, NULL, len);
+                printf("[DEBUG] Parsed ARRAY type (base size=%d, len=%d, total size=%d)\n", stype->base->size, len, size);
+            }
             int slot = add_var(id->str, stype);
             printf("[DEBUG] Declared struct variable %s (type=%s, size=%d)\n",
                 id->str, stype->name, stype->size);
-
             if (match(TK_ASSIGN)) {
                 consume_tok();
-                parse_struct_init(stype, slot);  // *** HANDLE INITIALIZATION ***
+                parse_struct_init(stype, slot);
             }
             expect(TK_SEMI);
             return;
         }
     }
 
-    // *** 3. RETURN STATEMENT ***
     if (match(TK_RETURN)) {
         consume_tok();
         Expr* e = parse_expr();
         fprintf(out, "    ; return\n");
         emit_expr(e);
+        if (e->type == ty_float) {
+            fprintf(out, "    sub esp,4\n");
+            fprintf(out, "    fstp dword [esp]\n");
+            fprintf(out, "    pop eax\n");
+        }
+        fprintf(out, "    mov esp, ebp\n    pop ebp\n");
         fprintf(out, "    ret\n");
         has_return = 1;
         expect(TK_SEMI);
         return;
     }
 
-    // *** 4. POINTER ASSIGNMENT *ptr = expr ***
     if (match(TK_STAR)) {
         consume_tok();
         if (!match(TK_IDENT)) { fprintf(stderr, "expected identifier after *\n"); exit(1); }
@@ -1074,41 +1521,78 @@ void parse_statement() {
         return;
     }
 
-    // *** 5. INLINE ASM ***
     if (match(TK_ASM)) {
         parse_inline_asm();
         return;
     }
 
-    // *** 6. IDENT STARTS HERE - VARIABLE ASSIGN, STRUCT FIELD, CALL, INC/DEC ***
     if (match(TK_IDENT)) {
         Token* idtok = consume_tok();
+        int slot = find_var(idtok->str);
 
-        // *** STRUCT.FIELD ACCESS ***
+        if (match(TK_LBRACKET)) {
+            consume_tok();
+            Expr* index = parse_expr();
+            expect(TK_RBRACKET);
+            if (slot < 0) { fprintf(stderr, "undefined variable %s\n", idtok->str); exit(1); }
+            if (vars[slot].type->kind != TY_ARRAY) { fprintf(stderr, "%s is not an array\n", idtok->str); exit(1); }
+            if (match(TK_ASSIGN)) {
+                consume_tok();
+                Expr* right = parse_expr();
+                fprintf(out, "    ; assign to %s[...]\n", vars[slot].name);
+                emit_expr(index);
+                fprintf(out, "    push eax\n");
+                fprintf(out, "    lea eax,[%s]\n", vars[slot].name);
+                fprintf(out, "    pop ebx\n");
+                int elem_size = vars[slot].type->base->size;
+                if (elem_size > 1) {
+                    fprintf(out, "    mov ecx,%d\n", elem_size);
+                    fprintf(out, "    imul ebx,ecx\n");
+                }
+                fprintf(out, "    add eax,ebx\n");
+                fprintf(out, "    push eax\n");
+                emit_expr(right);
+                fprintf(out, "    pop ebx\n");
+                if (elem_size == 1) fprintf(out, "    mov [ebx],al\n");
+                else if (elem_size == 2) fprintf(out, "    mov [ebx],ax\n");
+                else fprintf(out, "    mov [ebx],eax\n");
+                expect(TK_SEMI);
+                return;
+            }
+            unconsume_tok(idtok);
+            Expr* e_full = parse_expr();
+            fprintf(out, "    ; load %s[...]\n", idtok->str);
+            emit_expr(e_full);
+            expect(TK_SEMI);
+            return;
+        }
+
         if (match(TK_DOT)) {
-            consume_tok(); // dot
+            consume_tok();
             if (!match(TK_IDENT)) { fprintf(stderr, "expected field name\n"); exit(1); }
-            consume_tok(); // field name
+            consume_tok();
             parse_struct_field_assign();
             return;
         }
 
-        // *** NORMAL VARIABLE ASSIGNMENT ***
-        int slot = find_var(idtok->str);
         if (slot >= 0 && match(TK_ASSIGN)) {
             consume_tok();
             Expr* e = parse_expr();
             fprintf(out, "    ; assign to %s\n", vars[slot].name);
             emit_expr(e);
-            int s = vars[slot].type->size;
-            if (s == 1) fprintf(out, "    mov [%s],al\n", vars[slot].name);
-            else if (s == 2) fprintf(out, "    mov [%s],ax\n", vars[slot].name);
-            else fprintf(out, "    mov [%s],eax\n", vars[slot].name);
+            if (vars[slot].type == ty_float) {
+                fprintf(out, "    fstp dword [%s]\n", vars[slot].name);
+            }
+            else {
+                int s = vars[slot].type->size;
+                if (s == 1) fprintf(out, "    mov [%s],al\n", vars[slot].name);
+                else if (s == 2) fprintf(out, "    mov [%s],ax\n", vars[slot].name);
+                else fprintf(out, "    mov [%s],eax\n", vars[slot].name);
+            }
             expect(TK_SEMI);
             return;
         }
 
-        // *** INC/DEC ***
         if (slot >= 0 && (match(TK_INC) || match(TK_DEC))) {
             Expr* e = calloc(1, sizeof(Expr));
             e->kind = (peek_tok()->kind == TK_INC) ? EXPR_INC : EXPR_DEC;
@@ -1121,7 +1605,6 @@ void parse_statement() {
             return;
         }
 
-        // *** FUNCTION CALL ***
         if (match(TK_LPAREN)) {
             Expr* e = calloc(1, sizeof(Expr));
             e->kind = EXPR_CALL;
@@ -1143,15 +1626,20 @@ void parse_statement() {
             return;
         }
 
-        fprintf(stderr, "unexpected pattern for ident '%s'\n", idtok->str);
-        exit(1);
+        if (slot < 0) { fprintf(stderr, "undefined variable %s\n", idtok->str); exit(1); }
+        Expr* e = calloc(1, sizeof(Expr));
+        e->kind = EXPR_VAR;
+        e->name = my_strdup(idtok->str);
+        e->type = vars[slot].type;
+        fprintf(out, "    ; load %s\n", idtok->str);
+        emit_expr(e);
+        expect(TK_SEMI);
+        return;
     }
 
-    // *** 7. CONTROL FLOW ***
     if (match(TK_IF)) { parse_if(); return; }
     if (match(TK_WHILE)) { parse_while(); return; }
 
-    // *** 8. PRINT ***
     if (match(TK_PRINT)) {
         consume_tok();
         expect(TK_LPAREN);
@@ -1164,17 +1652,22 @@ void parse_statement() {
 
         if (match(TK_COMMA)) {
             do {
-                consume_tok();  // eat comma
+                consume_tok();
                 args[arg_count++] = parse_expr();
             } while (match(TK_COMMA));
         }
         expect(TK_RPAREN);
         expect(TK_SEMI);
 
-        // *** FIXED: CORRECT STACK ORDER (RIGHT TO LEFT) ***
         for (int i = arg_count - 1; i >= 0; --i) {
             emit_expr(args[i]);
-            fprintf(out, "    push eax\n");
+            if (args[i]->type == ty_float) {
+                fprintf(out, "    sub esp,4\n");
+                fprintf(out, "    fstp dword [esp]\n");
+            }
+            else {
+                fprintf(out, "    push eax\n");
+            }
         }
         fprintf(out, "    lea eax,[%s]\n", label);
         fprintf(out, "    push eax\n");
@@ -1188,9 +1681,8 @@ void parse_statement() {
     consume_tok();
 }
 
-// ---------- FIXED: FULL FUNCTION SUPPORT ----------
 void parse_function_and_emit() {
-    has_return = 0;  // *** RESET for each function ***
+    has_return = 0;
 
     Type* ret_type = parse_type();
 
@@ -1246,20 +1738,30 @@ void parse_function_and_emit() {
         fprintf(out, "    mov esp, ebp\n    pop ebp\n");
     }
 
-    // *** FIXED: ONLY emit ret if NO return statement ***
     if (!has_return) {
         fprintf(out, "    ret\n\n");
     }
+    else {
+        fprintf(out, "\n");
+    }
 }
 
-// ---------- SECTIONS ----------
 void emit_data_section() {
-    if (str_count == 0) return;
     fprintf(out, "\nsection .data\n");
+
     for (int i = 0; i < str_count; i++) {
         fprintf(out, "%s db ", strings[i].label);
-        for (int j = 0; j < strlen(strings[i].str); j++) fprintf(out, "%d,", (unsigned char)strings[i].str[j]);
+        for (int j = 0; j < strlen(strings[i].str); j++)
+            fprintf(out, "%d,", (unsigned char)strings[i].str[j]);
         fprintf(out, "0\n");
+    }
+
+    for (int i = 0; i < float_count; i++) {
+        // Convert double to float (32-bit)
+        float f = (float)floats[i].val;
+        // Get the raw bytes
+        unsigned int* ptr = (unsigned int*)&f;
+        fprintf(out, "%s dd 0x%08X\n", floats[i].label, *ptr);
     }
 }
 
@@ -1271,7 +1773,6 @@ void emit_bss_section() {
     fprintf(out, "vga_cursor resd 1\n");
 }
 
-// *** ENHANCED: PRINT ROUTINE WITH %c & %x ***
 void emit_print_routine() {
     fprintf(out,
         "\nprint_string:\n"
@@ -1289,8 +1790,10 @@ void emit_print_routine() {
         ".done:\n"
         "    popa\n"
         "    ret\n\n"
+    );
 
-        "\nprint_fmt:\n"
+    fprintf(out,
+        "print_fmt:\n"
         "    push ebp\n"
         "    mov ebp, esp\n"
         "    push ebx\n"
@@ -1303,8 +1806,8 @@ void emit_print_routine() {
         "    lodsb\n"
         "    test al, al\n"
         "    jz .done\n"
-        "    cmp al, 10\n"              // *** NEW: Skip newline ***
-        "    je .loop\n"                 // *** NEW: Skip newline ***
+        "    cmp al, 10\n"
+        "    je .loop\n"
         "    cmp al, '%%'\n"
         "    jne .print\n"
         "    lodsb\n"
@@ -1314,6 +1817,8 @@ void emit_print_routine() {
         "    je .decimal\n"
         "    cmp al, 'x'\n"
         "    je .hex\n"
+        "    cmp al, 'f'\n"
+        "    je .float\n"
         "    mov al, '?'\n"
         ".print:\n"
         "    mov ah, 0x0F\n"
@@ -1335,14 +1840,21 @@ void emit_print_routine() {
         "    call print_hex8\n"
         "    add ebx, 4\n"
         "    jmp .loop\n"
+        ".float:\n"
+        "    fld dword [ebx]\n"
+        "    call print_float\n"
+        "    add ebx, 4\n"
+        "    jmp .loop\n"
         ".done:\n"
         "    pop edi\n"
         "    pop esi\n"
         "    pop ebx\n"
         "    pop ebp\n"
         "    ret\n\n"
+    );
 
-        "\nprint_int:\n"
+    fprintf(out,
+        "print_int:\n"
         "    push ebx\n"
         "    push ecx\n"
         "    push edx\n"
@@ -1374,8 +1886,10 @@ void emit_print_routine() {
         "    pop ecx\n"
         "    pop ebx\n"
         "    ret\n\n"
+    );
 
-        "\nprint_hex8:\n"
+    fprintf(out,
+        "print_hex8:\n"
         "    push ebx\n"
         "    push ecx\n"
         "    push edx\n"
@@ -1395,14 +1909,87 @@ void emit_print_routine() {
         "    pop ecx\n"
         "    pop ebx\n"
         "    ret\n\n"
-
-        "\nhex_chars db '0123456789ABCDEF'\n"
     );
+    fprintf(out,
+        "print_float:\n"
+        "    push ebx\n"
+        "    push ecx\n"
+        "    push edx\n"
+        "    push esi\n"
+        "    sub esp, 12\n"
+        // Check sign
+        "    fst dword [esp]\n"
+        "    mov eax, [esp]\n"
+        "    test eax, 0x80000000\n"
+        "    jz .pos\n"
+        "    mov al, '-'\n"
+        "    mov ah, 0x0F\n"
+        "    stosw\n"
+        "    fchs\n"
+        ".pos:\n"
+        // Get integer part - force truncation by subtracting 0.5 first
+        "    fld st0\n"                    // Duplicate: ST(0)=val, ST(1)=val
+        "    mov dword [esp+8], 0x3F000000\n"  // 0.5 in IEEE 754
+        "    fld dword [esp+8]\n"          // ST(0)=0.5, ST(1)=val, ST(2)=val
+        "    fsubp st1, st0\n"             // ST(0)=val-0.5, ST(1)=val
+        "    fistp dword [esp]\n"          // Round(val-0.5), pop
+        "    mov eax, [esp]\n"             // Integer part (truncated)
+        // Now calculate fractional part using original value
+        "    fild dword [esp]\n"           // ST(0)=int, ST(1)=original_val
+        "    fsubp st1, st0\n"             // ST(0)=original_val-int
+        // Print integer part
+        "    mov eax, [esp]\n"
+        "    call print_int\n"
+        // Print decimal point
+        "    mov al, '.'\n"
+        "    mov ah, 0x0F\n"
+        "    stosw\n"
+        // Multiply fractional part by 1000000
+        "    mov dword [esp+4], 1000000\n"
+        "    fild dword [esp+4]\n"
+        "    fmulp st1, st0\n"
+        "    fistp dword [esp]\n"
+        "    mov eax, [esp]\n"
+        // Make sure it's positive
+        "    test eax, eax\n"
+        "    jns .got_frac\n"
+        "    neg eax\n"
+        ".got_frac:\n"
+        // Print exactly 6 digits
+        "    mov esi, 100000\n"
+        ".frac_loop:\n"
+        "    xor edx, edx\n"
+        "    div esi\n"
+        "    add al, '0'\n"
+        "    mov ah, 0x0F\n"
+        "    stosw\n"
+        "    mov eax, edx\n"
+        "    mov edx, esi\n"
+        "    mov esi, 10\n"
+        "    push eax\n"
+        "    mov eax, edx\n"
+        "    xor edx, edx\n"
+        "    div esi\n"
+        "    mov esi, eax\n"
+        "    pop eax\n"
+        "    test esi, esi\n"
+        "    jnz .frac_loop\n"
+        "    add esp, 12\n"
+        "    pop esi\n"
+        "    pop edx\n"
+        "    pop ecx\n"
+        "    pop ebx\n"
+        "    ret\n\n"
+    );
+
+    fprintf(out, "hex_chars db '0123456789ABCDEF'\n");
 }
 
-// ---------- MAIN ----------
 int main(int argc, char** argv) {
-    if (argc < 3) { fprintf(stderr, "Usage: %s input.c output.asm\n", argv[0]); return 1; }
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s input.c output.asm\n", argv[0]);
+        return 1;
+    }
 
     printf("[*] Opening input file: %s\n", argv[1]);
     FILE* f = fopen(argv[1], "rb");
@@ -1410,11 +1997,16 @@ int main(int argc, char** argv) {
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    src = malloc(sz + 1);
-    fread(src, 1, sz, f);
-    src[sz] = 0;
+    char* raw_src = malloc(sz + 1);
+    fread(raw_src, 1, sz, f);
+    raw_src[sz] = 0;
     fclose(f);
     printf("[*] Source file loaded, %ld bytes\n", sz);
+
+    printf("[*] Preprocessing...\n");
+    src = preprocess(raw_src);
+    free(raw_src);
+    printf("[*] Preprocessed, %ld bytes\n", (long)strlen(src));
 
     init_types();
     tokenize();
