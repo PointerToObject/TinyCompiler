@@ -398,12 +398,10 @@ section .bss
 ## License & Support
 
 **Aiden Compiler** - A specialized compiler for bare-metal x86 development  
-**Author:** [Your Name]  
+**Author:** PointerToObject  
 **Version:** 1.0  
-**License:** [Your License]
+**License:** DeezNutz
 
-For bug reports, feature requests, and support, please visit:  
-[Your Repository URL]
 
 ---
 
