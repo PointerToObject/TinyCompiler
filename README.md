@@ -3,7 +3,6 @@
 **Version 1.0**  
 **Language:** Aiden++  
 **Target Architecture:** x86 (32-bit)  
-**Author:** [Your Name]
 
 ---
 
